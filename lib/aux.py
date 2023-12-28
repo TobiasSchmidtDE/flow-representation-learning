@@ -2,7 +2,6 @@ import sys
 import os
 import os.path as osp
 import json
-import argparse
 import numpy as np
 import torch
 import math

@@ -8,14 +8,11 @@ import torch.backends.cudnn as cudnn
 import numpy as np
 import time
 import shutil
-from torchvision.datasets import MNIST
-from torch.utils.data import DataLoader
 from torch.utils.tensorboard import SummaryWriter
 from tensorboard import program
-from .aux import sample_z, TrainingStatTracker, update_progress, update_stdout, sec2dhms
-from transforms import *
+from lib.aux import TrainingStatTracker, update_progress, update_stdout, sec2dhms
+from transforms import AddRandomTransformationDims, To_Color
 from torch.distributions.normal import Normal
-from torch.autograd import grad
 
 torch.autograd.set_detect_anomaly(True)
 
@@ -260,7 +257,7 @@ class TrainerOTScratch(object):
                 # Update statistics tracker
                 self.stat_tracker.update(
                     classification_loss=rho_loss1.item(),
-                    regression_loss=vae_loss.item()
+                    regression_loss=vae_loss.item(),
                     pde_loss=loss_pde,
                     total_loss=loss.item())
                 loss.backward()

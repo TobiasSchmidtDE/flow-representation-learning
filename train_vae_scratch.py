@@ -1,42 +1,42 @@
 import argparse
 import torch
-from lib import *
-from vae import ConvVAE,ConvEncoder2
 from torchvision.datasets import MNIST
-from torch.utils.data import DataLoader
 from torchvision import transforms
-import torchvision
-import numpy as np
-import os
-from transforms import *
-from Shapes3d import *
-torch.set_default_tensor_type('torch.cuda.FloatTensor')
+from torch.utils.data import DataLoader
+from pathlib import Path    
+import datetime
+import json
+
+from lib.aux import create_exp_dir
+from lib.DiffPDE import DiffPDE
+from lib.HJPDE import HJPDE
+from lib.trainer_ot_scratch import TrainerOTScratch
+from vae import ConvVAE
 
 
 def main():
-     """
-        ===[ PDEs ]=========================================================================================
-        -K, --num-support-sets     : set number of PDEs
-        -D, --num-timesteps        : set number of timesteps
-        --support-set-lr           : set learning rate for learning PDEs
-        
-        ===[ Training ]=================================================================================================
-        --max-iter                 : set maximum number of training iterations
-        --batch-size               : set training batch size
-        --log-freq                 : set number iterations per log
-        --ckp-freq                 : set number iterations per checkpoint model saving
-        --tensorboard              : use TensorBoard
-        
-        ===[ CUDA ]=====================================================================================================
-        --cuda                     : use CUDA during training (default)
-        --no-cuda                  : do NOT use CUDA during training
-        ================================================================================================================
+    """
+    ===[ PDEs ]=========================================================================================
+    -K, --num-support-sets     : set number of PDEs
+    -D, --num-timesteps        : set number of timesteps
+    --support-set-lr           : set learning rate for learning PDEs
+    
+    ===[ Training ]=================================================================================================
+    --max-iter                 : set maximum number of training iterations
+    --batch-size               : set training batch size
+    --log-freq                 : set number iterations per log
+    --ckp-freq                 : set number iterations per checkpoint model saving
+    --tensorboard              : use TensorBoard
+    
+    ===[ CUDA ]=====================================================================================================
+    --cuda                     : use CUDA during training (default)
+    --no-cuda                  : do NOT use CUDA during training
+    ================================================================================================================
     """
     parser = argparse.ArgumentParser(description="Latent Flow training script")
-
     # === PDEs ======================================================================== #
-    parser.add_argument('-K', '--num-support-sets', type=int, help="set number of PDEs")
-    parser.add_argument('-D', '--num-timesteps', type=int, help="set number of timesteps")
+    parser.add_argument('-K', '--num-support-sets', type=int, help="set number of PDEs", default=3)
+    parser.add_argument('-D', '--num-timesteps', type=int, help="set number of timesteps", default=16)
     parser.add_argument('--support-set-lr', type=float, default=1e-4, help="set learning rate for learning PDEs")
     # === Training =================================================================================================== #
     parser.add_argument('--max-iter', type=int, default=100000, help="set maximum number of training iterations")
@@ -48,14 +48,22 @@ def main():
     # === CUDA ======================================================================================================= #
     parser.add_argument('--cuda', dest='cuda', action='store_true', help="use CUDA during training")
     parser.add_argument('--no-cuda', dest='cuda', action='store_false', help="do NOT use CUDA during training")
-    parser.set_defaults(cuda=True)
+    parser.set_defaults(cuda=False)
     # ================================================================================================================ #
 
     # Parse given arguments
     args = parser.parse_args()
 
     # Create output dir and save current arguments
-    exp_dir = create_exp_dir(args)
+    exp_dir = Path('./experiments/ot_scratch')
+    # create subfolder with current timestamp and config args
+    current_time = datetime.datetime.now().strftime("%Y-%m-%d-%H-%M-%S")
+    exp_dir = exp_dir / '{}'.format(current_time)
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    # save config args as dict
+    with open(exp_dir / 'config.json', 'w') as f:
+        json.dump(vars(args), f)
+    
 
     # CUDA
     use_cuda = False
@@ -73,13 +81,13 @@ def main():
     else:
         torch.set_default_tensor_type('torch.FloatTensor')
 
-
+    device = torch.device("cuda" if use_cuda else "cpu")
 
     if args.shapes3d == True:
         G = ConvVAE(num_channel=3,latent_size=15*15+1,img_size=64)
         G.load_state_dict(torch.load("vae_shapes3d.pt", map_location='cpu'))
         print("Initialize Shapes3D VAE")
-    elif:
+    else:
         G = ConvVAE(num_channel=3, latent_size=18*18, img_size=28)
         print("Intialize MNIST VAE")
 
@@ -102,33 +110,20 @@ def main():
 
 
     # Count number of trainable parameters
-    print("  \\__Trainable parameters: {:,}".format(sum(p.numel() for p in R.parameters() if p.requires_grad)))
+    print("  \\__Trainable parameters: {:,}".format(sum(p.numel() for p in S_Prior.parameters() if p.requires_grad)))
 
     # Set up trainer
-    if args.shapes3d:
-        print("SHAPES3D DATASET LOADING")
-        train_tx = torchvision.transforms.Compose([
-            torchvision.transforms.ToTensor(),
-            torchvision.transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
-        ])
-        dataset = Shapes3D(root='/nfs/data_lambda/ysong/3dshapes.h5', train=True, transform=None)
-        #train_set, val_set = torch.utils.data.random_split(dataset, [int(len(dataset)*0.8), int(len(dataset)*0.2)],generator=torch.Generator(device='cuda'))
-        data_loader = DataLoader(
-            dataset=dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
-            generator=torch.Generator(device='cuda'))
-        trn = TrainerOTScratchShapes(params=args, exp_dir=exp_dir, use_cuda=use_cuda, multi_gpu=multi_gpu,
-                               data_loader=data_loader,dataset=dataset)
-    else:
-        print("MNIST DATASET LOADING")
-        #train_loader, val_loader, test_loader = preprocessor.get_dataloaders(batch_size=data_config['batch_size'])
-        dataset = MNIST(root='/nfs/data_lambda/ysong/', train=True, transform=transforms.ToTensor(),download=True)
-        #train_set, val_set = torch.utils.data.random_split(dataset, [int(len(dataset) * 0.8), int(len(dataset) * 0.2)],generator=torch.Generator(device='cuda'))
-        #dataset = DSprites(root='/nfs/data_chaos/ysong/simplegan_experiments/dataset', transform=transforms.ToTensor())
-        data_loader = DataLoader(
-            dataset=dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
-            generator=torch.Generator(device='cuda'))
-        trn = TrainerOTScratch(params=args, exp_dir=exp_dir, use_cuda=use_cuda, multi_gpu=multi_gpu,
-                                data_loader=data_loader)
+    
+    print("MNIST DATASET LOADING")
+    #train_loader, val_loader, test_loader = preprocessor.get_dataloaders(batch_size=data_config['batch_size'])
+    dataset = MNIST(root='./data', train=True, transform=transforms.ToTensor(),download=True)
+    #train_set, val_set = torch.utils.data.random_split(dataset, [int(len(dataset) * 0.8), int(len(dataset) * 0.2)],generator=torch.Generator(device='cuda'))
+    #dataset = DSprites(root='/nfs/data_chaos/ysong/simplegan_experiments/dataset', transform=transforms.ToTensor())
+    data_loader = DataLoader(
+        dataset=dataset, batch_size=args.batch_size, shuffle=True, drop_last=True,
+        generator=torch.Generator(device=device))
+    trn = TrainerOTScratch(params=args, exp_dir=exp_dir, use_cuda=use_cuda, multi_gpu=multi_gpu,
+                            data_loader=data_loader)
 
     # Train
     trn.train(generator=G, support_sets=S, prior = S_Prior)
